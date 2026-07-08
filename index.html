@@ -207,6 +207,12 @@ body{
 /* goal reminder */
 .goalnote{display:flex;align-items:center;gap:8px;background:var(--train-s);border:1px solid #F6D3DE;border-radius:13px;padding:11px 14px;font-size:13px;font-weight:600;color:#7d2340;margin-bottom:16px}
 
+/* backup / restore */
+.backup-row{display:flex;gap:10px}
+.bkbtn{flex:1;text-align:center;border:1px solid var(--line);background:var(--card);color:var(--ink);font-weight:600;font-size:13.5px;border-radius:12px;padding:12px 8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.bkbtn:active{transform:scale(.97)}
+.bkbtn.primary{background:var(--train);border-color:var(--train);color:#fff}
+
 /* tab bar */
 .tabbar{position:fixed;left:0;right:0;bottom:0;display:flex;
   padding:8px 8px calc(var(--sab) + 8px);
@@ -592,6 +598,43 @@ function fuelView(){
  return html;
 }
 
+/* ---- BACKUP / RESTORE ---- */
+function exportBackup(){
+ try{
+   const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
+   const url=URL.createObjectURL(blob);
+   const a=document.createElement("a");
+   a.href=url; a.download="recomp-backup-"+TODAY+".json";
+   document.body.appendChild(a); a.click(); document.body.removeChild(a);
+   setTimeout(()=>URL.revokeObjectURL(url),1500);
+ }catch(e){ alert("Couldn't export the backup: "+e); }
+}
+function entryScore(e){
+ let n=0;
+ if(e.checks) n+=Object.values(e.checks).filter(Boolean).length;
+ if(e.protein) n++; if(e.walk) n++;
+ n+=(e.protg?1:0)+(e.carbg?1:0)+(e.sugarg?1:0);
+ return n;
+}
+function importBackup(file){
+ const reader=new FileReader();
+ reader.onload=async()=>{
+   try{
+     const obj=JSON.parse(reader.result);
+     if(!obj||typeof obj!=="object"||!obj.log){ alert("That doesn't look like a Recomp backup file."); return; }
+     if(!confirm("Restore this backup? It merges into your current history, keeping the fullest record for each day.")) return;
+     const cur=state.log||{};
+     for(const k in obj.log){
+       if(!cur[k] || entryScore(obj.log[k])>=entryScore(cur[k])) cur[k]=obj.log[k];
+     }
+     state.log=cur;
+     await persist(); render();
+     alert("Backup restored 🎉");
+   }catch(e){ alert("Couldn't read that file — is it the backup .json? "+e); }
+ };
+ reader.readAsText(file);
+}
+
 /* ---- HISTORY ---- */
 function historyView(){
  const keys=Object.keys(state.log).filter(k=>dayCompletion(k).done>0).sort();
@@ -630,21 +673,29 @@ function historyView(){
  html+=`<div class="slabel">Recent sessions</div>`;
  if(!keys.length){
    html+=`<div class="empty">No sessions yet.<br>Check off today's workout and it'll show up here. 💪</div>`;
-   return html;
+ } else {
+   html+=`<div class="card">`;
+   keys.slice().reverse().slice(0,30).forEach(k=>{
+     const e=state.log[k],c=dayCompletion(k);
+     const d=dayById(e.workout);
+     const name=d?d.t:"Session";
+     const col=d&&d.type==="train"?"var(--train)":"var(--rest)";
+     const dt=new Date(k+"T00:00:00").toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
+     const pro=e.protein?" · protein ✓":"";
+     html+=`<div class="hrow"><span class="hdot" style="background:${col}"></span>
+       <div class="hmid"><div class="hd-t">${name}</div><div class="hd-s">${dt}${pro}</div></div>
+       <div class="hpct" style="color:${col}">${c.pct}%</div></div>`;
+   });
+   html+=`</div>`;
  }
- html+=`<div class="card">`;
- keys.slice().reverse().slice(0,30).forEach(k=>{
-   const e=state.log[k],c=dayCompletion(k);
-   const d=dayById(e.workout);
-   const name=d?d.t:"Session";
-   const col=d&&d.type==="train"?"var(--train)":"var(--rest)";
-   const dt=new Date(k+"T00:00:00").toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
-   const pro=e.protein?" · protein ✓":"";
-   html+=`<div class="hrow"><span class="hdot" style="background:${col}"></span>
-     <div class="hmid"><div class="hd-t">${name}</div><div class="hd-s">${dt}${pro}</div></div>
-     <div class="hpct" style="color:${col}">${c.pct}%</div></div>`;
- });
- html+=`</div>`;
+
+ // backup / restore — protects your history from a browser clear or device switch
+ html+=`<div class="slabel">Backup</div>
+   <div class="card pad"><div style="font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:12px">Save your progress to a file, or restore it after a browser clear or on a new device.</div>
+   <div class="backup-row">
+     <button class="bkbtn primary" data-export>⬇&nbsp; Export backup</button>
+     <label class="bkbtn">⬆&nbsp; Restore<input type="file" data-import accept="application/json,.json" hidden></label>
+   </div></div>`;
  return html;
 }
 
@@ -677,6 +728,11 @@ function bind(){
  // protein / walk toggles
  document.querySelectorAll("[data-tog]").forEach(el=>el.onclick=async()=>{
    const t=el.dataset.tog,e=entry(TODAY);e[t]=!e[t];await persist();render();
+ });
+ // backup / restore
+ document.querySelectorAll("[data-export]").forEach(el=>el.onclick=()=>exportBackup());
+ document.querySelectorAll("[data-import]").forEach(el=>el.onchange=(ev)=>{
+   const f=ev.target.files&&ev.target.files[0]; if(f) importBackup(f); ev.target.value="";
  });
  // fuel macro sub-tab switch
  document.querySelectorAll("[data-seg]").forEach(el=>el.onclick=()=>{fuelSeg=el.dataset.seg;render();});
